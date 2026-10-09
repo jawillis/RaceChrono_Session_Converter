@@ -264,8 +264,14 @@ def convert(folder, outdir, video_channel=None, video_index=None, no_video=False
     for col, vals in sorted(gps_raw):
         add(col, 'raw', 3, vals)
 
-    # GPS-derived accelerations (matches RaceChrono's calc channels' sign convention)
-    v = smooth(gps['speed'])
+    # GPS-derived accelerations. Smoothing windows (in seconds) were tuned to match
+    # RaceChrono's own latacc-calc / longacc-calc channels, including their sign convention.
+    rate = (n - 1) / tsec[-1] if tsec[-1] > 0 else 25.0
+
+    def win(seconds):
+        k = max(1, int(round(seconds * rate)))
+        return k if k % 2 else k + 1
+
     hdg, off, prev = [], 0.0, None
     for b in gps['bearing']:
         r = math.radians(b)
@@ -275,9 +281,11 @@ def convert(folder, outdir, video_channel=None, video_index=None, no_video=False
             elif d < -math.pi: off += 2 * math.pi
         prev = r
         hdg.append(r + off)
-    yaw = gradient(smooth(hdg), tsec)
-    add('lat_acc', 'g', 3, [-vi * w / G for vi, w in zip(v, yaw)])
-    add('long_acc', 'g', 3, [a / G for a in gradient(v, tsec)])
+    v_lat = smooth(gps['speed'], win(0.36))
+    yaw = smooth(gradient(hdg, tsec), win(0.6))
+    add('lat_acc', 'g', 3, [-vi * w / G for vi, w in zip(v_lat, yaw)])
+    v_long = smooth(gps['speed'], win(0.52))
+    add('long_acc', 'g', 3, [a / G for a in smooth(gradient(v_long, tsec), win(0.52))])
 
     # IMU + CAN + anything else, interpolated onto GPS timestamps
     for key in sorted(k for k in files if k[0] == 'ch'):
@@ -364,8 +372,8 @@ def convert(folder, outdir, video_channel=None, video_index=None, no_video=False
     std = [('satellites', 'sats', ''), ('time', 'time', 'UTC hhmmss'), ('latitude', 'lat', 'minutes'),
            ('longitude', 'long', 'minutes'), ('velocity kmh', 'velocity', 'km/h'), ('heading', 'heading', 'deg'),
            ('height', 'height', 'm')]
-    with open(out, 'w', newline='\r\n') as f:
-        f.write('File created on %s @ %s\n\n' % (created.strftime('%d/%m/%Y'), created.strftime('%H:%M:%S')))
+    with open(out, 'w', newline='\r\n', encoding='utf-8') as f:
+        f.write('File created on %s at %s\n\n' % (created.strftime('%d/%m/%Y'), created.strftime('%H:%M:%S')))
         f.write('[header]\n')
         for h, _, _ in std:
             f.write(h + '\n')
@@ -393,10 +401,11 @@ def convert(folder, outdir, video_channel=None, video_index=None, no_video=False
                                              v.get('videoChannelId', '?'), utc(st) if st else 'unknown time'))
         if avi_files:
             f.write('\n[avi]\n%s\n%s\n' % (avi_prefix, avi_ext.upper()))
+        f.write('\n[session data]\nname %s\n' % track)
         if laps:
             gate = start_gate(laps[0]['startTimestamp'], gts, lat_raw, lon_raw, gps['bearing'])
             if gate:
-                f.write('\n[laptiming]\nStart   %s %s %s %s \u00ac Start / Finish\n' % gate)
+                f.write('\n[laptiming]\nStart   %s %s %s %s \u00ac Start/Finish\n' % gate)
         f.write('\n[column names]\n')
         f.write(' '.join([c for _, c, _ in std] + [c[0] for c in columns]) + '\n')
         f.write('\n[data]\n')
@@ -420,21 +429,20 @@ def convert(folder, outdir, video_channel=None, video_index=None, no_video=False
     return out, n, len(columns), len(laps), sum(len(v) for v in vchans.values()), len(unresolved), linked
 
 
-def start_gate(t0, gts, lat_raw, lon_raw, bearing, half_width=15.0):
+def start_gate(t0, gts, lat_raw, lon_raw, bearing, approach=75.0):
+    """VBO start line in the form RaceChrono writes it: the first point is the line's
+    position on the track, the second is a point on the approach to it (the line is
+    perpendicular to the direction between them)."""
     i = bisect.bisect_left(gts, t0)
     if i <= 0 or i >= len(gts):
         return None
     f = (t0 - gts[i - 1]) / max(1, gts[i] - gts[i - 1])
     lat = (lat_raw[i - 1] + (lat_raw[i] - lat_raw[i - 1]) * f) / 6e6
     lon = (lon_raw[i - 1] + (lon_raw[i] - lon_raw[i - 1]) * f) / 6e6
-    perp = math.radians(bearing[i] + 90)
-    dlat = half_width * math.cos(perp) / 111320.0
-    dlon = half_width * math.sin(perp) / (111320.0 * math.cos(math.radians(lat)))
-    pts = []
-    for s in (1, -1):
-        pts.append('%+012.5f' % (-(lon + s * dlon) * 60))
-        pts.append('%+012.5f' % ((lat + s * dlat) * 60))
-    return tuple(pts)
+    back = math.radians(bearing[i] + 180)
+    lat2 = lat + approach * math.cos(back) / 110574.0
+    lon2 = lon + approach * math.sin(back) / (111320.0 * math.cos(math.radians(lat)))
+    return ('%+.6f' % (-lon * 60), '%+.6f' % (lat * 60), '%+.6f' % (-lon2 * 60), '%+.6f' % (lat2 * 60))
 
 
 def find_sessions(paths):

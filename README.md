@@ -50,7 +50,7 @@ All channels are resampled to the GPS rate, since VBO has one row per time step.
 - **Standard VBO channels:** satellites, UTC time, latitude, longitude, speed (km/h), heading, and height.
 - **Lap number and distance**, from RaceChrono's lap timing. A start/finish line is also written to the `[laptiming]` section.
 - **GPS accuracy.**
-- **Lateral and longitudinal acceleration (g)**, derived from GPS in the same way as RaceChrono's own calculated channels.
+- **Lateral and longitudinal acceleration (g)**, derived from GPS. These match RaceChrono's own calculated channels to within about 0.04 g.
 - **Raw accelerometer (g) and gyro (deg/s)**, from the phone or another IMU.
 - **CAN-bus channels**, such as RPM, throttle, brake, clutch, steering angle, temperatures, fuel level, odometer, vehicle speed, and the four wheel speeds. Speeds are converted to km/h.
 - **Video sync**, for each RaceChrono video channel: `videoN_file` (which file, numbered from 1, with 0 meaning no video) and `videoN_time` (milliseconds into that file). One channel is also written as the standard Video VBOX `avifileindex`/`avisynctime` columns with an `[avi]` section. GoPro chapter files are chained automatically.
@@ -58,18 +58,25 @@ All channels are resampled to the GPS rate, since VBO has one row per time step.
 
 ### Verification
 
-Decoding was checked against RaceChrono's own CSV v3 export of the same session. All GPS, accelerometer, gyro, and CAN-bus channels match at identical timestamps, apart from the CSV's rounding. Lap times measured from the generated start/finish line agree with RaceChrono's to within one GPS sample.
+Decoding was checked against RaceChrono's own CSV v3 export of the same session. All GPS, accelerometer, gyro, and CAN-bus channels match at identical timestamps, apart from the CSV's rounding. Lap times measured from the generated start/finish line agree with RaceChrono's to within one GPS sample. Output has also been compared with RaceChrono Pro's own VBO export of the same session, as described in the next section.
 
 ### Known limitations
 
 - **Undocumented format.** RaceChrono's session format was reverse-engineered from RaceChrono Pro sessions and is not officially documented. A future app version could change it.
 - **Unknown channels.** Channels the converter doesn't recognize are still exported, but as raw, unscaled columns (`gps_fNNNNN`, `devNNN_fNN`, `can_NNNNN`) with a warning. Known examples are GPS fields 30004 and 30005 from an external GPS receiver, and device type 8 fields 28–30.
 - **CAN channel names.** These come from RaceChrono's built-in channel IDs. Custom channels appear as `can_<id>`.
-- **Start/finish line.** RaceChrono keeps track definitions in the app, not in the session folder, so the line is reconstructed from where the first timed lap began. It is 30 m wide and perpendicular to your heading. Most analysis tools let you redefine it.
+- **Start/finish line.** RaceChrono keeps track definitions in the app, not in the session folder, so the line is reconstructed from where the first timed lap began, and written in the same form as RaceChrono's own VBO export. Split lines aren't reconstructed. Most analysis tools let you redefine the line or add splits.
 - **Unsynced external camera recordings.** These have no linked file, so they can't be placed on the timeline. Their approximate start time is noted in the VBO comments so you can sync them by hand.
 - **Video rotation.** Rotation (for example, a phone mounted upside down) can't be expressed in VBO. It is noted in the comments, and you'll need to apply it in your video tool.
 - **`[avi]` handling.** Different tools interpret the `[avi]` section slightly differently. The per-channel `videoN_*` columns are always present as a fallback.
 - **Multi-fragment sessions.** Sessions split across several fragments haven't been seen yet and are untested. The converter warns if a session looks unusual.
+
+### Differences from RaceChrono's own VBO export
+
+- **Sample rate.** RaceChrono resamples everything, including GPS, to a 100 Hz grid. `rc2vbo.py` keeps the native GPS rate (for example 25 Hz) and interpolates other channels onto it, so no GPS points are invented and files are about 6–7 times smaller.
+- **Before the first sample.** RaceChrono writes 0 for a channel until its first reading arrives (for example 0 °C oil temperature). `rc2vbo.py` holds the first real reading instead.
+- **Extra and missing channels.** RaceChrono adds lean angle, combined acceleration, and device update rates. `rc2vbo.py` adds lap number, distance, and video sync. RaceChrono's standard `longacc`/`latacc` columns are always zero; its GPS-derived values are in `latacc-calc`/`longacc-calc`, which correspond to `lat_acc`/`long_acc` here.
+- **Units.** RaceChrono puts units in the `[header]` names. `rc2vbo.py` lists them in a `[channel units]` section.
 
 ## RaceChrono session format notes
 
